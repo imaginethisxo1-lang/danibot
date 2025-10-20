@@ -1,12 +1,19 @@
 
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } = require('discord.js');
-const express = require('express'); // <-- added for keepalive
+const {
+    Client,
+    GatewayIntentBits,
+    Partials,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    Events,
+    PermissionsBitField
+} = require('discord.js');
 
 const heldMessages = new Map();
-const MOD_CHANNEL_ID = '1260042560848531537'; // replace with your mod channel ID
+const MOD_CHANNEL_ID = '1260042560848531537'; // Replace with your mod channel ID
 
-// Create Discord client
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -16,29 +23,40 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel],
 });
 
-// Keepalive server for Railway free tier
-const app = express();
-app.get('/', (req, res) => res.send('Bot is alive!'));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Keepalive server running on port ${PORT}`));
-
-// Discord ready event
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// Detect messages with links
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    // 🚫 Ignore users with Administrator permissions
+    if (message.member?.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        console.log(`Skipping admin message from ${message.author.tag}`);
+        return;
+    }
+
     const linkPattern = /(https?:\/\/[^\s]+)/gi;
+
     if (linkPattern.test(message.content)) {
+        const lowerContent = message.content.toLowerCase();
+
+        // 🚫 Ignore GIF links
+        if (
+            lowerContent.endsWith('.gif') ||
+            lowerContent.includes('tenor.com') ||
+            lowerContent.includes('giphy.com')
+        ) {
+            console.log(`Skipping GIF link from ${message.author.tag}`);
+            return;
+        }
+
         try {
             await message.delete();
 
             const modChannel = message.guild.channels.cache.get(MOD_CHANNEL_ID);
             if (!modChannel) {
-                console.log('Mod channel not found. Check MOD_CHANNEL_ID.');
+                console.log('❌ Mod channel not found. Check MOD_CHANNEL_ID.');
                 return;
             }
 
@@ -59,37 +77,44 @@ client.on('messageCreate', async (message) => {
                 components: [row],
             });
 
-            // Save original message info keyed by mod message ID
+            // Save the held message
             heldMessages.set(modMessage.id, {
                 author: message.author,
                 content: message.content,
                 originalChannel: message.channel
             });
 
-            console.log('Storing held message:', modMessage.id, message.content, message.channel.id);
+            console.log(
+                `🕒 Holding message from ${message.author.tag} for approval.`
+            );
 
             await message.author.send(
                 `Your message with a link in **${message.guild.name}** was held for moderation. A moderator will review it soon.`
             );
         } catch (err) {
-            console.error('Error handling message:', err);
+            console.error('⚠️ Error handling message:', err);
         }
     }
 });
 
-// Handle button clicks
 client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
 
     const held = heldMessages.get(interaction.message.id);
     if (!held) {
-        await interaction.reply({ content: 'This message is no longer available.', ephemeral: true });
+        await interaction.reply({
+            content: 'This message is no longer available.',
+            ephemeral: true
+        });
         return;
     }
 
     if (interaction.customId === 'approve') {
         await held.originalChannel.send(`🔗 Message from ${held.author.tag}: ${held.content}`);
-        await interaction.update({ content: '✅ Link approved and posted in original channel.', components: [] });
+        await interaction.update({
+            content: '✅ Link approved and posted in original channel.',
+            components: []
+        });
         heldMessages.delete(interaction.message.id);
     } else if (interaction.customId === 'deny') {
         await interaction.update({ content: '❌ Link denied.', components: [] });
@@ -97,5 +122,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-// Login
 client.login(process.env.DISCORD_TOKEN);
